@@ -9,129 +9,87 @@ on:
 jobs:
   build_windows_artifact:
     runs-on: windows-latest
+    env:
+      # 全局指定 Go 编译入口路径，避免路径混淆
+      GO_BUILD_ENTRY: "subs-check-go-kernel/cmd/main" # 对齐实际代码目录结构
+      GO_OUTPUT: "subs-check.exe"
 
     steps:
       - name: ⬇️ Checkout code (检出代码)
         uses: actions/checkout@v4
-        
-      # 移除误删 .git 的清理步骤，保留 Go 缓存清理即可
-      - name: 🧹 Clean up Go Cache (清理 Go 缓存)
-        shell: powershell
-        run: |
-          Write-Host "正在清理 Go 缓存..."
-          if (Test-Path -Path $env:GOPATH) { Remove-Item -Path $env:GOPATH -Recurse -Force }
-          go clean -modcache # 额外清理模块缓存，避免依赖残留
+        with:
+          fetch-depth: 1 # 浅克隆，减少缓存干扰
 
-      # --- 1. 手动安装 Go 环境（补全全局环境变量配置）---
-      
-      - name: 🛠️ Setup Go environment Manually (手动安装 Go 环境)
+      - name: 🧹 Full Cleanup (彻底清理缓存)
         shell: powershell
         run: |
-          $goVersion = "1.21.13"
-          Write-Host "正在手动下载并安装 Go $goVersion..."
-          
-          $goZip = "go$goVersion.windows-amd64.zip"
-          $goUrl = "https://golang.org/dl/$goZip"
-          Invoke-WebRequest -Uri $goUrl -OutFile $goZip
-          
-          Expand-Archive -Path $goZip -DestinationPath "C:\" -Force
-          
-          # 配置全局环境变量（原仅当前会话生效，补全 Persist 确保后续步骤可用）
-          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\go\bin", "Machine")
-          $gopath = "C:\Users\runneradmin\go"
-          [Environment]::SetEnvironmentVariable("GOPATH", $gopath, "Machine")
-          New-Item -Path $gopath -ItemType Directory -Force # 确保 GOPATH 目录存在
-          
-          $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine")
-          $env:GOPATH = [Environment]::GetEnvironmentVariable("GOPATH", "Machine")
-          Write-Host "Go 环境配置完毕。版本信息:"
-          go version
-          
-      - name: 🛠️ Setup .NET Core (安装 .NET 环境)
+          # 清理所有可能的缓存和残留
+          Remove-Item -Path "$env:GOPATH" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "$env:GOROOT" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path ".\go.mod", ".\go.sum" -ErrorAction SilentlyContinue
+          go clean -modcache -cache -i -r 2>$null
+          Write-Host "缓存清理完成"
+
+      - name: 🛠️ Setup Go (使用官方 Action 确保环境正确，替代手动安装避免配置问题)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21.13'
+          cache: false # 禁用缓存，避免旧配置干扰
+
+      - name: 🛠️ Setup .NET Core
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x' 
+          dotnet-version: '6.0.x'
 
-      # --- 2. 编译核心 subs-check.exe 内核 (Go)（确认路径匹配根目录 main.go）---
-      
-      - name: ⚙️ Build subs-check.exe (编译 Go 内核)
+      - name: ⚙️ Verify Code Structure (校验目录结构，确认入口存在)
         shell: powershell
         run: |
-          $Workspace = "${{ github.workspace }}"
-          Set-Location $Workspace
-          
-          Write-Host "当前工作目录: $Workspace"
-          Write-Host "目录文件列表:"
-          Get-ChildItem # 打印文件列表，确认 main.go 存在
-          
-          Write-Host "正在整理 Go 模块依赖..."
+          Write-Host "当前工作目录: ${{ github.workspace }}"
+          Write-Host "核心代码目录结构:"
+          Get-ChildItem -Path $env:GO_BUILD_ENTRY -Recurse # 打印入口目录文件，确认存在
+          if (-not (Test-Path $env:GO_BUILD_ENTRY)) {
+              Write-Error "致命错误：Go 编译入口 $env:GO_BUILD_ENTRY 不存在！"
+              exit 1
+          }
+
+      - name: ⚙️ Build subs-check.exe (编译 Go 内核，使用正确入口路径)
+        shell: powershell
+        run: |
+          Set-Location ${{ github.workspace }}
+          # 进入 Go 项目根目录执行 mod tidy（确保依赖正确）
+          Set-Location (Split-Path $env:GO_BUILD_ENTRY -Parent | Split-Path -Parent)
           go mod tidy
-          
-          # 明确编译根目录 main.go，匹配实际文件路径
-          $BuildCommand = "go build -ldflags ""-s -w"" -o subs-check.exe main.go"
-          Write-Host "执行编译命令: $BuildCommand"
-          Invoke-Expression $BuildCommand
-          
-          if (-not (Test-Path subs-check.exe)) {
-              Write-Error "错误：Go 内核编译失败，未生成 subs-check.exe 文件！"
+          Set-Location ${{ github.workspace }}
+          # 明确使用正确入口路径编译
+          go build -ldflags "-s -w" -o $env:GO_OUTPUT $env:GO_BUILD_ENTRY
+          # 校验输出
+          if (-not (Test-Path $env:GO_OUTPUT)) {
+              Write-Error "Go 编译失败，未生成 $env:GO_OUTPUT"
               exit 1
           }
           Write-Host "Go 内核编译成功"
 
-      # --- 3. 编译 subs-check.win.gui.exe (C# / .NET) ---
-      
-      - name: 🖥️ Build GUI and Dependencies (编译 GUI 和依赖文件)
+      - name: 🖥️ Build GUI and Dependencies
         shell: powershell
         run: |
           $GuiProjectName = "subs-check.win.gui.sln" 
           $OutputFolder = "${{ github.workspace }}/gui_build_output"
-          
-          dotnet publish $GuiProjectName `
-            --configuration Release `
-            --runtime win-x86 `
-            -o $OutputFolder
+          dotnet publish $GuiProjectName --configuration Release --runtime win-x86 -o $OutputFolder
+          Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe", "$OutputFolder\*.dll", "$OutputFolder\*.xml" -Destination ${{ github.workspace }} -Force
 
-          Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\YamlDotNet.dll" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\YamlDotNet.xml" -Destination ${{ github.workspace }}
-          
-
-      # --- 4. 准备其他文件和目录结构 ---
-      
-      - name: 📦 Prepare Release Files (准备配置和预编译文件)
+      - name: 📦 Prepare Release Files
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Path config -Force
-          New-Item -ItemType Directory -Path output -Force
-          
-          # 增加文件存在校验，避免拷贝失败
-          if (Test-Path Upgrade.exe) { Copy-Item -Path Upgrade.exe -Destination ${{ github.workspace }} }
-          else { Write-Warning "Upgrade.exe 不存在，跳过拷贝" }
-          if (Test-Path subs-check_Windows_i386.zip) { Copy-Item -Path subs-check_Windows_i386.zip -Destination ${{ github.workspace }} }
-          else { Write-Warning "subs-check_Windows_i386.zip 不存在，跳过拷贝" }
-          
+          New-Item -ItemType Directory -Path config, output -Force
+          Copy-Item -Path Upgrade.exe, subs-check_Windows_i386.zip -Destination ${{ github.workspace }} -Force -ErrorAction SilentlyContinue
 
-      # --- 5. 压缩所有文件到 ZIP ---
-      
-      - name: 💾 Compress All Files (压缩文件)
+      - name: 💾 Compress All Files
         shell: powershell
         run: |
-          $TagName = "${{ github.ref_name }}"
-          $ZipName = "SubCheck-Portable-$TagName.zip"
-          
-          Compress-Archive `
-            -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
-                    Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
-                    YamlDotNet.dll, YamlDotNet.xml, `
-                    subs-check_Windows_i386.zip, `
-                    config, output `
-            -DestinationPath $ZipName -Force # 加 -Force 覆盖已有文件
+          $ZipName = "SubCheck-Portable-${{ github.ref_name }}.zip"
+          Compress-Archive -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, *.dll, *.xml, subs-check_Windows_i386.zip, config, output -DestinationPath $ZipName -Force
 
-      # --- 6. 上传到 Release Assets ---
-      
-      - name: 📤 Upload Release Asset (上传到 Release)
+      - name: 📤 Upload Release Asset
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
