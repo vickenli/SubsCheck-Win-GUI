@@ -3,12 +3,12 @@ name: "Windows Portable Release Build"
 on:
   push:
     tags: 
-      - 'v*'
-  workflow_dispatch:
+      - 'v*' # 仅在推送版本标签时触发
+  workflow_dispatch: # 允许手动点击运行
 
 jobs:
   build_windows_artifact:
-    runs-on: windows-latest
+    runs-on: windows-latest # 确保在 Windows 环境下编译
 
     steps:
       - name: ⬇️ Checkout code (检出代码)
@@ -31,12 +31,12 @@ jobs:
       - name: ⚙️ Build subs-check.exe (编译 Go 内核)
         shell: powershell
         run: |
-          # 1. 整理和下载依赖 (go.mod 已在根目录)
+          # 1. 整理和下载依赖 (go.mod, go.sum 已在根目录)
           Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
           # 2. 编译 Go 项目并输出到根目录
-          # 【最终修正的编译命令】: 使用 'main.go' 作为入口文件，因为它在根目录
+          # 【最简、最准确的命令】: 编译根目录下的 main.go 文件。
           Write-Host "正在编译 Go 内核..."
           go build -ldflags "-s -w" -o subs-check.exe main.go
           
@@ -60,7 +60,7 @@ jobs:
             --runtime win-x86 `
             -o $OutputFolder
 
-          # 移动编译结果和依赖DLLs到根目录
+          # 移动编译结果和依赖DLLs到根目录 (对应最终文件结构)
           Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
@@ -90,6 +90,7 @@ jobs:
           $TagName = "${{ github.ref_name }}"
           $ZipName = "SubCheck-Portable-$TagName.zip"
           
+          # 压缩所有文件和目录 (对应最终文件结构)
           Compress-Archive `
             -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
                     Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
