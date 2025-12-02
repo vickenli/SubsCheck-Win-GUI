@@ -19,19 +19,19 @@ jobs:
       - name: 🛠️ Setup Go environment (安装 Go 环境)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.21' # 根据 Go 模块要求调整
 
       - name: 🛠️ Setup .NET Core (安装 .NET 环境)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x' 
+          dotnet-version: '6.0.x' # 根据 GUI 项目要求调整
 
       # --- 2. 拉取 Go 内核源码并编译 subs-check.exe ---
       
       - name: 📥 Clone Go Kernel and Build subs-check.exe
         shell: powershell
         run: |
-          # 假设 Go 内核的仓库地址（请再次检查这个URL是否正确）
+          # Go 内核的仓库地址
           $KernelRepoUrl = "https://github.com/beck-8/subs-check.git" 
           $KernelDir = "go-kernel-source" 
           $OutputExe = "subs-check.exe"
@@ -42,19 +42,18 @@ jobs:
           # 1. 切换到内核源码目录
           cd $KernelDir
           
-          # 2. 整理和下载依赖 (自动解决 go.mod 问题)
+          # 2. 整理和下载依赖 (go.mod 在根目录，此处执行即可)
           Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
           # 3. 编译 Go 项目并输出到工作区根目录
-          # 【最终修正】使用 '.' 来指示 go build 编译当前 Go 模块的所有内容
-          # 这样 Go 工具链会自动找到入口文件，避免手动指定文件名错误。
+          # 【最终修正】编译当前目录下的 'main.go'
           Write-Host "正在编译 Go 内核..."
-          go build -ldflags "-s -w" -o ../$OutputExe . 
+          go build -ldflags "-s -w" -o ../$OutputExe main.go 
           
           # 检查编译结果
           if (-not (Test-Path ../$OutputExe)) {
-              Write-Error "错误：Go 内核编译失败，未生成 $OutputExe 文件！请检查 Go 仓库结构。"
+              Write-Error "错误：Go 内核编译失败，未生成 $OutputExe 文件！"
               exit 1
           }
           
@@ -66,6 +65,7 @@ jobs:
       - name: 🖥️ Build GUI and Dependencies (编译 GUI 和依赖文件)
         shell: powershell
         run: |
+          # 解决方案名为 subs-check.win.gui.sln
           $GuiProjectName = "subs-check.win.gui.sln" 
           $OutputFolder = "${{ github.workspace }}/gui_build_output"
           
@@ -74,7 +74,7 @@ jobs:
             --runtime win-x86 `
             -o $OutputFolder
 
-          # 移动编译结果和依赖DLLs到根目录
+          # 移动编译结果和依赖DLLs到根目录 (对应最终文件结构)
           Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
@@ -87,7 +87,7 @@ jobs:
       - name: 📦 Prepare Release Files (准备配置和预编译文件)
         shell: powershell
         run: |
-          # 创建 config 和 output 目录
+          # 创建 config 和 output 目录 (对应最终文件结构)
           New-Item -ItemType Directory -Path config
           New-Item -ItemType Directory -Path output
           
@@ -104,6 +104,7 @@ jobs:
           $TagName = "${{ github.ref_name }}"
           $ZipName = "SubCheck-Portable-$TagName.zip"
           
+          # 压缩所有文件和目录 (对应最终文件结构)
           Compress-Archive `
             -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
                     Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
