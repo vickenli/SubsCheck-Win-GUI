@@ -36,9 +36,9 @@ jobs:
           go mod tidy
           
           # 2. 编译 Go 项目并输出到根目录
-          # 编译根目录下的 Go 源码 (main.go/init.go)
+          # 【最终修正的编译命令】: 使用 'main.go' 作为入口文件，因为它在根目录
           Write-Host "正在编译 Go 内核..."
-          go build -ldflags "-s -w" -o subs-check.exe .
+          go build -ldflags "-s -w" -o subs-check.exe main.go
           
           # 检查编译结果
           if (-not (Test-Path subs-check.exe)) {
@@ -60,7 +60,7 @@ jobs:
             --runtime win-x86 `
             -o $OutputFolder
 
-          # 移动编译结果和依赖DLLs到根目录 (对应最终文件结构)
+          # 移动编译结果和依赖DLLs到根目录
           Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
@@ -73,7 +73,7 @@ jobs:
       - name: 📦 Prepare Release Files (准备配置和预编译文件)
         shell: powershell
         run: |
-          # 创建 config 和 output 目录 (对应最终文件结构)
+          # 创建 config 和 output 目录
           New-Item -ItemType Directory -Path config
           New-Item -ItemType Directory -Path output
           
@@ -90,7 +90,6 @@ jobs:
           $TagName = "${{ github.ref_name }}"
           $ZipName = "SubCheck-Portable-$TagName.zip"
           
-          # 压缩所有文件和目录 (对应最终文件结构)
           Compress-Archive `
             -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
                     Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
