@@ -3,15 +3,15 @@ name: "Windows Portable Release Build"
 on:
   push:
     tags: 
-      - 'v*' # 仅在推送版本标签时触发，例如 git push origin v1.0.0
-  workflow_dispatch: # 允许在 GitHub 页面手动点击运行
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build_windows_artifact:
-    runs-on: windows-latest # 确保在 Windows 环境下编译，以生成 EXE 文件
+    runs-on: windows-latest
 
     steps:
-      - name: ⬇️ Checkout code (检出代码)
+      - name: ⬇️ Checkout code (检出您的 GUI 仓库)
         uses: actions/checkout@v4
 
       # --- 1. 安装构建环境和依赖 ---
@@ -19,44 +19,36 @@ jobs:
       - name: 🛠️ Setup Go environment (安装 Go 环境)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21' # 您可以根据您的 Go 内核实际版本进行调整
+          go-version: '1.21'
 
       - name: 🛠️ Setup .NET Core (安装 .NET 环境)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x' # 假设使用 .NET 6 进行编译
+          dotnet-version: '6.0.x' 
 
-      # --- 2. 编译核心 subs-check.exe 内核 (Go) ---
+      # --- 2. 拉取 Go 内核源码并编译 subs-check.exe ---
       
-      - name: ⚙️ Build subs-check.exe (编译 Go 内核)
+      - name: 📥 Clone Go Kernel and Build subs-check.exe
         shell: powershell
         run: |
-          # 【!!! 重要修改 !!!】
-          # 请将 'subs-check-go-kernel' 替换为您Go源码所在的文件夹名称
-          $KernelDir = "subs-check-go-kernel" 
+          # 【!!! 关键修改：拉取 Go 内核源码 !!!】
+          # 请将此 URL 替换为实际的 Subs-Check Go 内核仓库地址
+          $KernelRepoUrl = "https://github.com/beck-8/subs-check.git" 
+          $KernelDir = "go-kernel-source" 
           
-          # 检查 Go 源码目录是否存在
-          if (-not (Test-Path $KernelDir)) {
-             Write-Error "找不到Go源码目录 '$KernelDir'，请检查路径是否正确。"
-             exit 1
-          }
+          Write-Host "正在拉取 Go 内核源码：$KernelRepoUrl"
+          git clone $KernelRepoUrl $KernelDir
           
           # 1. 切换到内核源码目录
           cd $KernelDir
           
-          # 2. 如果 go.mod 不存在，初始化一个 Go 模块
-          if (-not (Test-Path go.mod)) {
-            Write-Host "go.mod 文件不存在，正在初始化模块..."
-            # 这里的路径用仓库名代替，Go才能识别为模块
-            go mod init github.com/${{ github.repository }} 
-          }
-          
-          # 3. 整理和下载依赖
+          # 2. 下载依赖并整理 go.mod
           go mod tidy
           
-          # 4. 编译 Go 项目并输出到工作区根目录
-          # 假设入口文件是 main.go，并指定输出路径为上一级目录
-          go build -ldflags "-s -w" -o ../subs-check.exe main.go 
+          # 3. 编译 Go 项目并输出到工作区根目录
+          # 假设 Go 源码入口在仓库的根目录，文件名为 main.go 或 subs-check.go
+          # 请检查 beck-8/subs-check 仓库的入口文件名为 subs-check.go
+          go build -ldflags "-s -w" -o ../subs-check.exe subs-check.go 
           
           # 返回工作区根目录
           cd ..
@@ -69,40 +61,33 @@ jobs:
           $GuiProjectName = "subs-check.win.gui.sln" 
           $OutputFolder = "${{ github.workspace }}/gui_build_output"
           
-          # 编译并发布 GUI 项目
           dotnet publish $GuiProjectName `
             --configuration Release `
-            --runtime win-x86 ` # 目标平台 x86/i386
+            --runtime win-x86 `
             -o $OutputFolder
 
-          # 移动关键的 GUI 文件到根目录 (准备打包)
-          # 编译后的主EXE名
+          # 移动编译结果和依赖DLLs到根目录
           Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
-          
-          # 移动所有必要的 DLL 和 XML 依赖文件
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\YamlDotNet.dll" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\YamlDotNet.xml" -Destination ${{ github.workspace }}
           
-          # 注意：如果还有其他必要的 DLL，需要在这里添加 Copy-Item 命令
 
       # --- 4. 准备其他文件和目录结构 ---
       
       - name: 📦 Prepare Release Files (准备配置和预编译文件)
         shell: powershell
         run: |
-          # 确保最终压缩包中的 config 和 output 目录存在
+          # 创建 config 和 output 目录
           New-Item -ItemType Directory -Path config
           New-Item -ItemType Directory -Path output
           
-          # 如果您的 Upgrade.exe 和 subs-check_Windows_i386.zip 已经在仓库根目录，无需复制。
-          # 如果它们在某个子文件夹 (如 'prebuilt/')，则需要复制到根目录：
-          # Copy-Item -Path prebuilt\Upgrade.exe -Destination ${{ github.workspace }}
-          # Copy-Item -Path prebuilt\subs-check_Windows_i386.zip -Destination ${{ github.workspace }}
+          # 复制预编译文件 (假设它们在仓库根目录)
+          Copy-Item -Path Upgrade.exe -Destination ${{ github.workspace }}
+          Copy-Item -Path subs-check_Windows_i386.zip -Destination ${{ github.workspace }}
           
-          # 假设配置文件 config.yaml 和 more.yaml 已经放在 config 目录
-          
+
       # --- 5. 压缩所有文件到 ZIP ---
       
       - name: 💾 Compress All Files (压缩文件)
@@ -111,7 +96,6 @@ jobs:
           $TagName = "${{ github.ref_name }}"
           $ZipName = "SubCheck-Portable-$TagName.zip"
           
-          # 压缩所有生成和需要的最终文件
           Compress-Archive `
             -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
                     Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
