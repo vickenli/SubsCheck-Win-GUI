@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: ⬇️ Checkout code (检出代码)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1 # 仅拉取最新代码，加速检出
 
       # --- 1. 安装构建环境和依赖 ---
       
@@ -20,6 +22,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21' 
+          cache: false # 禁用缓存，避免因 go.sum 缺失报错
 
       - name: 🛠️ Setup .NET Core (安装 .NET 环境)
         uses: actions/setup-dotnet@v4
@@ -31,20 +34,34 @@ jobs:
       - name: ⚙️ Build subs-check.exe (编译 Go 内核)
         shell: powershell
         run: |
-          # 1. 整理和下载依赖 (go.mod, go.sum 已在根目录)
-          Write-Host "正在整理 Go 模块依赖..."
-          go mod tidy
+          # 【关键修复】定义 Go 源码的实际目录（根据你的仓库结构调整！）
+          $GoSrcDir = "${{ github.workspace }}/subs-check-go-kernel/cmd"
+          $OutputExe = "${{ github.workspace }}/subs-check.exe"
           
-          # 2. 编译 Go 项目并输出到根目录
-          # 【最简、最准确的命令】: 编译根目录下的 main.go 文件。
-          Write-Host "正在编译 Go 内核..."
-          go build -ldflags "-s -w" -o subs-check.exe main.go
+          # 校验 Go 源码目录是否存在
+          if (-not (Test-Path $GoSrcDir)) {
+              Write-Error "错误：Go 源码目录不存在！路径：$GoSrcDir"
+              Write-Error "请确认仓库中是否有 subs-check-go-kernel/cmd/ 目录，或修改 GoSrcDir 为正确路径"
+              exit 1
+          }
+          
+          # 切换到 Go 源码目录
+          cd $GoSrcDir
+          
+          # 整理和下载依赖 (基于当前源码目录的 go.mod)
+          Write-Host "正在整理 Go 模块依赖（目录：$GoSrcDir）..."
+          go mod tidy -v
+          
+          # 编译 Go 项目（输出到仓库根目录）
+          Write-Host "正在编译 Go 内核（输出到：$OutputExe）..."
+          go build -ldflags "-s -w" -o $OutputExe main.go
           
           # 检查编译结果
-          if (-not (Test-Path subs-check.exe)) {
+          if (-not (Test-Path $OutputExe)) {
               Write-Error "错误：Go 内核编译失败，未生成 subs-check.exe 文件！"
               exit 1
           }
+          Write-Host "✅ Go 内核编译成功：$OutputExe"
 
       # --- 3. 编译 subs-check.win.gui.exe (C# / .NET) ---
       
@@ -54,33 +71,59 @@ jobs:
           $GuiProjectName = "subs-check.win.gui.sln" 
           $OutputFolder = "${{ github.workspace }}/gui_build_output"
           
+          # 校验解决方案文件是否存在
+          if (-not (Test-Path $GuiProjectName)) {
+              Write-Error "错误：.NET 解决方案文件不存在！路径：$GuiProjectName"
+              exit 1
+          }
+          
           # 发布 GUI 项目
           dotnet publish $GuiProjectName `
             --configuration Release `
             --runtime win-x86 `
-            -o $OutputFolder
+            -o $OutputFolder `
+            --self-contained false # 可选：减少体积，不依赖系统.NET运行时
 
           # 移动编译结果和依赖DLLs到根目录 (对应最终文件结构)
-          Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\YamlDotNet.dll" -Destination ${{ github.workspace }}
-          Copy-Item -Path "$OutputFolder\YamlDotNet.xml" -Destination ${{ github.workspace }}
-          
+          $targetFiles = @(
+              "subs-check.win.gui.exe",
+              "Newtonsoft.Json.dll",
+              "Newtonsoft.Json.xml",
+              "YamlDotNet.dll",
+              "YamlDotNet.xml"
+          )
+          foreach ($file in $targetFiles) {
+              $srcPath = "$OutputFolder\$file"
+              $dstPath = "${{ github.workspace }}\$file"
+              if (Test-Path $srcPath) {
+                  Copy-Item -Path $srcPath -Destination $dstPath -Force
+                  Write-Host "✅ 复制文件：$file"
+              } else {
+                  Write-Warning "警告：.NET 编译产物缺失，跳过复制：$file"
+              }
+          }
 
       # --- 4. 准备其他文件和目录结构 ---
       
       - name: 📦 Prepare Release Files (准备配置和预编译文件)
         shell: powershell
         run: |
-          # 创建 config 和 output 目录
-          New-Item -ItemType Directory -Path config
-          New-Item -ItemType Directory -Path output
+          # 创建 config 和 output 目录（强制创建，避免已存在报错）
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/config" -Force
+          New-Item -ItemType Directory -Path "${{ github.workspace }}/output" -Force
           
-          # 复制预编译文件 (假设它们在仓库根目录)
-          Copy-Item -Path Upgrade.exe -Destination ${{ github.workspace }}
-          Copy-Item -Path subs-check_Windows_i386.zip -Destination ${{ github.workspace }}
-          
+          # 复制预编译文件 (不存在则跳过并警告)
+          $preFiles = @("Upgrade.exe", "subs-check_Windows_i386.zip")
+          foreach ($file in $preFiles) {
+              $srcPath = "${{ github.workspace }}\$file"
+              $dstPath = $srcPath
+              if (Test-Path $srcPath) {
+                  Copy-Item -Path $srcPath -Destination $dstPath -Force
+                  Write-Host "✅ 复制预编译文件：$file"
+              } else {
+                  Write-Warning "警告：预编译文件不存在，跳过复制：$file"
+              }
+          }
 
       # --- 5. 压缩所有文件到 ZIP ---
       
@@ -89,15 +132,40 @@ jobs:
         run: |
           $TagName = "${{ github.ref_name }}"
           $ZipName = "SubCheck-Portable-$TagName.zip"
+          $ZipPath = "${{ github.workspace }}\$ZipName"
           
-          # 压缩所有文件和目录 (对应最终文件结构)
-          Compress-Archive `
-            -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
-                    Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
-                    YamlDotNet.dll, YamlDotNet.xml, `
-                    subs-check_Windows_i386.zip, `
-                    config, output `
-            -DestinationPath $ZipName
+          # 收集要压缩的文件（过滤不存在的文件，避免压缩失败）
+          $filesToCompress = @()
+          $targetPaths = @(
+              "subs-check.exe",
+              "subs-check.win.gui.exe",
+              "Upgrade.exe",
+              "Newtonsoft.Json.dll",
+              "Newtonsoft.Json.xml",
+              "YamlDotNet.dll",
+              "YamlDotNet.xml",
+              "subs-check_Windows_i386.zip",
+              "config",
+              "output"
+          )
+          foreach ($path in $targetPaths) {
+              $fullPath = "${{ github.workspace }}\$path"
+              if (Test-Path $fullPath) {
+                  $filesToCompress += $fullPath
+                  Write-Host "✅ 加入压缩：$path"
+              } else {
+                  Write-Warning "警告：文件/目录不存在，跳过压缩：$path"
+              }
+          }
+          
+          # 执行压缩（强制覆盖已存在的 ZIP）
+          if ($filesToCompress.Count -gt 0) {
+              Compress-Archive -Path $filesToCompress -DestinationPath $ZipPath -Force
+              Write-Host "✅ 压缩完成：$ZipPath"
+          } else {
+              Write-Error "错误：无可用文件进行压缩！"
+              exit 1
+          }
 
       # --- 6. 上传到 Release Assets ---
       
@@ -105,5 +173,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: SubCheck-Portable-*.zip
+          files: "${{ github.workspace }}/SubCheck-Portable-*.zip"
           token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
