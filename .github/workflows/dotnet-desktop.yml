@@ -26,12 +26,18 @@ jobs:
         with:
           dotnet-version: '6.0.x' 
 
-      # --- 2. 拉取 Go 内核源码并编译 subs-check.exe ---
+      # --- 2. 绕过 Go 模块检查，拉取内核并编译 subs-check.exe ---
       
       - name: 📥 Clone Go Kernel and Build subs-check.exe
         shell: powershell
         run: |
-          # Go 内核的仓库地址
+          # 【!!! 最终解决方案: 强制初始化主仓库 Go 模块，绕过检查 !!!】
+          Write-Host ">>> 绕过 Go 检查: 在主仓库根目录强制创建 Go 模块 <<<"
+          # 即使 Go 模块文件存在，我们仍然会执行这个命令，它不会覆盖真实的 Go 模块。
+          # 这是一个虚假的模块，仅用于满足 Go 工具链的检查。
+          go mod init github.com/${{ github.repository }}/dummy-module
+          
+          # Go 内核的仓库地址 (从您的截图得知为 beck-8/subs-check)
           $KernelRepoUrl = "https://github.com/beck-8/subs-check.git" 
           $KernelDir = "go-kernel-source" 
           $OutputExe = "subs-check.exe"
@@ -39,16 +45,15 @@ jobs:
           Write-Host "正在拉取 Go 内核源码：$KernelRepoUrl"
           git clone $KernelRepoUrl $KernelDir
           
-          # 1. 切换到内核源码目录
+          # 2. 切换到内核源码目录
           cd $KernelDir
           
-          # 2. 整理和下载依赖
-          # 确保在拉取的子仓库中执行 go mod tidy，下载依赖
+          # 3. 整理和下载依赖 (在拉取的子仓库中执行)
           Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
-          # 3. 编译 Go 项目并输出到工作区根目录
-          # 编译当前目录下的 'main.go' (beck-8/subs-check 源码入口)
+          # 4. 编译 Go 项目并输出到工作区根目录
+          # 编译当前目录下的 'main.go'
           Write-Host "正在编译 Go 内核..."
           go build -ldflags "-s -w" -o ../$OutputExe main.go 
           
@@ -66,6 +71,7 @@ jobs:
       - name: 🖥️ Build GUI and Dependencies (编译 GUI 和依赖文件)
         shell: powershell
         run: |
+          # 解决方案名为 subs-check.win.gui.sln
           $GuiProjectName = "subs-check.win.gui.sln" 
           $OutputFolder = "${{ github.workspace }}/gui_build_output"
           
