@@ -31,10 +31,10 @@ jobs:
       - name: 📥 Clone Go Kernel and Build subs-check.exe
         shell: powershell
         run: |
-          # 【!!! 关键修改：拉取 Go 内核源码 !!!】
-          # 请将此 URL 替换为实际的 Subs-Check Go 内核仓库地址
+          # 假设 Go 内核的仓库地址（请再次检查这个URL是否正确）
           $KernelRepoUrl = "https://github.com/beck-8/subs-check.git" 
           $KernelDir = "go-kernel-source" 
+          $OutputExe = "subs-check.exe"
           
           Write-Host "正在拉取 Go 内核源码：$KernelRepoUrl"
           git clone $KernelRepoUrl $KernelDir
@@ -42,13 +42,21 @@ jobs:
           # 1. 切换到内核源码目录
           cd $KernelDir
           
-          # 2. 下载依赖并整理 go.mod
+          # 2. 整理和下载依赖 (自动解决 go.mod 问题)
+          Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
           # 3. 编译 Go 项目并输出到工作区根目录
-          # 假设 Go 源码入口在仓库的根目录，文件名为 main.go 或 subs-check.go
-          # 请检查 beck-8/subs-check 仓库的入口文件名为 subs-check.go
-          go build -ldflags "-s -w" -o ../subs-check.exe subs-check.go 
+          # 【最终修正】使用 '.' 来指示 go build 编译当前 Go 模块的所有内容
+          # 这样 Go 工具链会自动找到入口文件，避免手动指定文件名错误。
+          Write-Host "正在编译 Go 内核..."
+          go build -ldflags "-s -w" -o ../$OutputExe . 
+          
+          # 检查编译结果
+          if (-not (Test-Path ../$OutputExe)) {
+              Write-Error "错误：Go 内核编译失败，未生成 $OutputExe 文件！请检查 Go 仓库结构。"
+              exit 1
+          }
           
           # 返回工作区根目录
           cd ..
