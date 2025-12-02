@@ -3,17 +3,17 @@ name: "Windows Portable Release Build"
 on:
   push:
     tags: 
-      - 'v*' # 仅在推送版本标签时触发
-  workflow_dispatch: # 允许手动点击运行
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build_windows_artifact:
-    runs-on: windows-latest # 确保在 Windows 环境下编译
+    runs-on: windows-latest
 
     steps:
       - name: ⬇️ Checkout code (检出代码)
         uses: actions/checkout@v4
-
+        
       # --- 1. 安装构建环境和依赖 ---
       
       - name: 🛠️ Setup Go environment (安装 Go 环境)
@@ -31,14 +31,22 @@ jobs:
       - name: ⚙️ Build subs-check.exe (编译 Go 内核)
         shell: powershell
         run: |
-          # 1. 整理和下载依赖 (go.mod 已在根目录)
+          # 确定当前工作区路径
+          $Workspace = "${{ github.workspace }}"
+          Write-Host "当前工作区路径: $Workspace"
+          
+          # 1. 切换到工作区根目录，确保 Go 命令在正确位置执行
+          Set-Location $Workspace
+          
+          # 2. 整理和下载依赖 (go.mod 已在根目录)
           Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
-          # 2. 编译 Go 项目并输出到根目录
-          # 【最终修正】: 编译根目录下的 main.go 文件，解决了所有路径问题。
-          Write-Host "正在编译 Go 内核..."
-          go build -ldflags "-s -w" -o subs-check.exe main.go
+          # 3. 编译 Go 项目并输出到根目录
+          # 使用 Invoke-Expression 确保命令被精确执行，并且明确指向根目录的 main.go
+          $BuildCommand = "go build -ldflags ""-s -w"" -o subs-check.exe main.go"
+          Write-Host "执行编译命令: $BuildCommand"
+          Invoke-Expression $BuildCommand
           
           # 检查编译结果
           if (-not (Test-Path subs-check.exe)) {
@@ -54,7 +62,6 @@ jobs:
           $GuiProjectName = "subs-check.win.gui.sln" 
           $OutputFolder = "${{ github.workspace }}/gui_build_output"
           
-          # 发布 GUI 项目
           dotnet publish $GuiProjectName `
             --configuration Release `
             --runtime win-x86 `
