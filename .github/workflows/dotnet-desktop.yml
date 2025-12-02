@@ -14,12 +14,22 @@ jobs:
       - name: ⬇️ Checkout code (检出代码)
         uses: actions/checkout@v4
         
-      # 【!!! 移除 actions/setup-go !!!】
-      # 替换为手动下载和配置 Go 环境，以避免 Go 工具链的缓存检查。
+      # 【!!! 新增步骤：深度清理 Git 历史 !!!】
+      - name: 🧹 Clean up Git History Cache (清理 Git 历史缓存)
+        shell: powershell
+        run: |
+          Write-Host "正在清理 Go 工具可能读取的旧 Git 历史..."
+          # 强制删除可能包含旧路径配置的 Go 缓存和模块信息
+          if (Test-Path -Path $env:GOPATH) { Remove-Item -Path $env:GOPATH -Recurse -Force }
+          # 重置 Git 目录，确保 Go 工具链无法从 Git 历史中找到旧的配置路径
+          Remove-Item -Path ".git" -Recurse -Force
+
+      # --- 1. 手动安装 Go 环境 ---
+      
       - name: 🛠️ Setup Go environment Manually (手动安装 Go 环境)
         shell: powershell
         run: |
-          $goVersion = "1.21.13" # 使用您之前日志中报告的版本
+          $goVersion = "1.21.13" # 沿用之前的稳定版本
           Write-Host "正在手动下载并安装 Go $goVersion..."
           
           # 下载 Go 压缩包
@@ -48,16 +58,13 @@ jobs:
         run: |
           # 确定当前工作区路径
           $Workspace = "${{ github.workspace }}"
-          Write-Host "当前工作区路径: $Workspace"
-          
-          # 1. 切换到工作区根目录，确保 Go 命令在正确位置执行
           Set-Location $Workspace
           
-          # 2. 整理和下载依赖 (go.mod 已在根目录)
+          # 1. 整理和下载依赖 (go.mod 已在根目录)
           Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
-          # 3. 编译 Go 项目并输出到根目录
+          # 2. 编译 Go 项目并输出到根目录
           # 使用 Invoke-Expression 确保命令被精确执行
           $BuildCommand = "go build -ldflags ""-s -w"" -o subs-check.exe main.go"
           Write-Host "执行编译命令: $BuildCommand"
@@ -95,11 +102,9 @@ jobs:
       - name: 📦 Prepare Release Files (准备配置和预编译文件)
         shell: powershell
         run: |
-          # 创建 config 和 output 目录
           New-Item -ItemType Directory -Path config
           New-Item -ItemType Directory -Path output
           
-          # 复制预编译文件 (假设它们在仓库根目录)
           Copy-Item -Path Upgrade.exe -Destination ${{ github.workspace }}
           Copy-Item -Path subs-check_Windows_i386.zip -Destination ${{ github.workspace }}
           
@@ -112,7 +117,6 @@ jobs:
           $TagName = "${{ github.ref_name }}"
           $ZipName = "SubCheck-Portable-$TagName.zip"
           
-          # 压缩所有文件和目录
           Compress-Archive `
             -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
                     Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
