@@ -14,35 +14,36 @@ jobs:
       - name: ⬇️ Checkout code (检出代码)
         uses: actions/checkout@v4
         
-      # 【!!! 新增步骤：深度清理 Git 历史 !!!】
-      - name: 🧹 Clean up Git History Cache (清理 Git 历史缓存)
+      # 移除误删 .git 的清理步骤，保留 Go 缓存清理即可
+      - name: 🧹 Clean up Go Cache (清理 Go 缓存)
         shell: powershell
         run: |
-          Write-Host "正在清理 Go 工具可能读取的旧 Git 历史..."
-          # 强制删除可能包含旧路径配置的 Go 缓存和模块信息
+          Write-Host "正在清理 Go 缓存..."
           if (Test-Path -Path $env:GOPATH) { Remove-Item -Path $env:GOPATH -Recurse -Force }
-          # 重置 Git 目录，确保 Go 工具链无法从 Git 历史中找到旧的配置路径
-          Remove-Item -Path ".git" -Recurse -Force
+          go clean -modcache # 额外清理模块缓存，避免依赖残留
 
-      # --- 1. 手动安装 Go 环境 ---
+      # --- 1. 手动安装 Go 环境（补全全局环境变量配置）---
       
       - name: 🛠️ Setup Go environment Manually (手动安装 Go 环境)
         shell: powershell
         run: |
-          $goVersion = "1.21.13" # 沿用之前的稳定版本
+          $goVersion = "1.21.13"
           Write-Host "正在手动下载并安装 Go $goVersion..."
           
-          # 下载 Go 压缩包
           $goZip = "go$goVersion.windows-amd64.zip"
           $goUrl = "https://golang.org/dl/$goZip"
           Invoke-WebRequest -Uri $goUrl -OutFile $goZip
           
-          # 解压到 C:\Go
           Expand-Archive -Path $goZip -DestinationPath "C:\" -Force
           
-          # 设置环境变量
-          $env:Path += ";C:\go\bin"
-          $env:GOPATH = "C:\Users\runneradmin\go"
+          # 配置全局环境变量（原仅当前会话生效，补全 Persist 确保后续步骤可用）
+          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\go\bin", "Machine")
+          $gopath = "C:\Users\runneradmin\go"
+          [Environment]::SetEnvironmentVariable("GOPATH", $gopath, "Machine")
+          New-Item -Path $gopath -ItemType Directory -Force # 确保 GOPATH 目录存在
+          
+          $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine")
+          $env:GOPATH = [Environment]::GetEnvironmentVariable("GOPATH", "Machine")
           Write-Host "Go 环境配置完毕。版本信息:"
           go version
           
@@ -51,30 +52,31 @@ jobs:
         with:
           dotnet-version: '6.0.x' 
 
-      # --- 2. 编译核心 subs-check.exe 内核 (Go) ---
+      # --- 2. 编译核心 subs-check.exe 内核 (Go)（确认路径匹配根目录 main.go）---
       
       - name: ⚙️ Build subs-check.exe (编译 Go 内核)
         shell: powershell
         run: |
-          # 确定当前工作区路径
           $Workspace = "${{ github.workspace }}"
           Set-Location $Workspace
           
-          # 1. 整理和下载依赖 (go.mod 已在根目录)
+          Write-Host "当前工作目录: $Workspace"
+          Write-Host "目录文件列表:"
+          Get-ChildItem # 打印文件列表，确认 main.go 存在
+          
           Write-Host "正在整理 Go 模块依赖..."
           go mod tidy
           
-          # 2. 编译 Go 项目并输出到根目录
-          # 使用 Invoke-Expression 确保命令被精确执行
+          # 明确编译根目录 main.go，匹配实际文件路径
           $BuildCommand = "go build -ldflags ""-s -w"" -o subs-check.exe main.go"
           Write-Host "执行编译命令: $BuildCommand"
           Invoke-Expression $BuildCommand
           
-          # 检查编译结果
           if (-not (Test-Path subs-check.exe)) {
               Write-Error "错误：Go 内核编译失败，未生成 subs-check.exe 文件！"
               exit 1
           }
+          Write-Host "Go 内核编译成功"
 
       # --- 3. 编译 subs-check.win.gui.exe (C# / .NET) ---
       
@@ -89,7 +91,6 @@ jobs:
             --runtime win-x86 `
             -o $OutputFolder
 
-          # 移动编译结果和依赖DLLs到根目录
           Copy-Item -Path "$OutputFolder\subs-check.win.gui.exe" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.dll" -Destination ${{ github.workspace }}
           Copy-Item -Path "$OutputFolder\Newtonsoft.Json.xml" -Destination ${{ github.workspace }}
@@ -102,11 +103,14 @@ jobs:
       - name: 📦 Prepare Release Files (准备配置和预编译文件)
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Path config
-          New-Item -ItemType Directory -Path output
+          New-Item -ItemType Directory -Path config -Force
+          New-Item -ItemType Directory -Path output -Force
           
-          Copy-Item -Path Upgrade.exe -Destination ${{ github.workspace }}
-          Copy-Item -Path subs-check_Windows_i386.zip -Destination ${{ github.workspace }}
+          # 增加文件存在校验，避免拷贝失败
+          if (Test-Path Upgrade.exe) { Copy-Item -Path Upgrade.exe -Destination ${{ github.workspace }} }
+          else { Write-Warning "Upgrade.exe 不存在，跳过拷贝" }
+          if (Test-Path subs-check_Windows_i386.zip) { Copy-Item -Path subs-check_Windows_i386.zip -Destination ${{ github.workspace }} }
+          else { Write-Warning "subs-check_Windows_i386.zip 不存在，跳过拷贝" }
           
 
       # --- 5. 压缩所有文件到 ZIP ---
@@ -123,7 +127,7 @@ jobs:
                     YamlDotNet.dll, YamlDotNet.xml, `
                     subs-check_Windows_i386.zip, `
                     config, output `
-            -DestinationPath $ZipName
+            -DestinationPath $ZipName -Force # 加 -Force 覆盖已有文件
 
       # --- 6. 上传到 Release Assets ---
       
