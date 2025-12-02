@@ -14,13 +14,28 @@ jobs:
       - name: ⬇️ Checkout code (检出代码)
         uses: actions/checkout@v4
         
-      # --- 1. 安装构建环境和依赖 ---
-      
-      - name: 🛠️ Setup Go environment (安装 Go 环境)
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21' 
-
+      # 【!!! 移除 actions/setup-go !!!】
+      # 替换为手动下载和配置 Go 环境，以避免 Go 工具链的缓存检查。
+      - name: 🛠️ Setup Go environment Manually (手动安装 Go 环境)
+        shell: powershell
+        run: |
+          $goVersion = "1.21.13" # 使用您之前日志中报告的版本
+          Write-Host "正在手动下载并安装 Go $goVersion..."
+          
+          # 下载 Go 压缩包
+          $goZip = "go$goVersion.windows-amd64.zip"
+          $goUrl = "https://golang.org/dl/$goZip"
+          Invoke-WebRequest -Uri $goUrl -OutFile $goZip
+          
+          # 解压到 C:\Go
+          Expand-Archive -Path $goZip -DestinationPath "C:\" -Force
+          
+          # 设置环境变量
+          $env:Path += ";C:\go\bin"
+          $env:GOPATH = "C:\Users\runneradmin\go"
+          Write-Host "Go 环境配置完毕。版本信息:"
+          go version
+          
       - name: 🛠️ Setup .NET Core (安装 .NET 环境)
         uses: actions/setup-dotnet@v4
         with:
@@ -43,7 +58,7 @@ jobs:
           go mod tidy
           
           # 3. 编译 Go 项目并输出到根目录
-          # 使用 Invoke-Expression 确保命令被精确执行，并且明确指向根目录的 main.go
+          # 使用 Invoke-Expression 确保命令被精确执行
           $BuildCommand = "go build -ldflags ""-s -w"" -o subs-check.exe main.go"
           Write-Host "执行编译命令: $BuildCommand"
           Invoke-Expression $BuildCommand
