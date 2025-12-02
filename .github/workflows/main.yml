@@ -1,0 +1,101 @@
+name: "Windows Portable Release Build"
+
+on:
+  push:
+    tags: 
+      - 'v*' # 在推送版本标签时触发
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build_windows_artifact:
+    runs-on: windows-latest # 确保在 Windows 环境下编译
+
+    steps:
+      - name: ⬇️ Checkout code
+        uses: actions/checkout@v4
+
+      # --- 1. 安装构建环境和依赖 ---
+      - name: 🛠️ Setup Go environment (for subs-check.exe)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21' # 替换为 subs-check 内核所需的 Go 版本
+
+      - name: 🛠️ Setup .NET Core (for subs-check.win.gui.exe and DLLs)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x' # 替换为 GUI 项目所需的 .NET 版本
+
+      # --- 2. 编译核心 subs-check.exe 内核 (Go) ---
+      # 假设 Go 内核代码在 ./subs-check-go-kernel
+      - name: ⚙️ Build subs-check.exe (Go Kernel)
+        run: |
+          # 编译 Go 项目并输出到根目录
+          go build -ldflags "-s -w" -o subs-check.exe ./subs-check-go-kernel/cmd/main
+        shell: powershell
+
+      # --- 3. 编译 subs-check.win.gui.exe (C# / .NET) ---
+      # 假设您的 GUI 项目文件是 subs-check.win.gui.csproj
+      - name: 🖥️ Build GUI and Dependencies
+        run: |
+          $GuiProjectName = "YourGuiProject.sln" # 替换为您的 GUI 解决方案名
+          
+          # 发布 GUI 项目，生成 EXE 和所有依赖 DLL/XML
+          dotnet publish $GuiProjectName `
+            --configuration Release `
+            --runtime win-x86 ` # 目标平台 i386 (x86)
+            -o ${{ github.workspace }}/gui_build_output
+
+          # 将编译后的主要exe重命名为 subs-check.win.gui.exe
+          Rename-Item -Path ${{ github.workspace }}\gui_build_output\YourProjectName.exe -NewName "subs-check.win.gui.exe"
+          
+          # 移动关键的 GUI 文件到根目录，准备打包
+          Copy-Item -Path ${{ github.workspace }}\gui_build_output\subs-check.win.gui.exe -Destination ${{ github.workspace }}
+          Copy-Item -Path ${{ github.workspace }}\gui_build_output\Newtonsoft.Json.dll -Destination ${{ github.workspace }}
+          Copy-Item -Path ${{ github.workspace }}\gui_build_output\Newtonsoft.Json.xml -Destination ${{ github.workspace }}
+          Copy-Item -Path ${{ github.workspace }}\gui_build_output\YamlDotNet.dll -Destination ${{ github.workspace }}
+          Copy-Item -Path ${{ github.workspace }}\gui_build_output\YamlDotNet.xml -Destination ${{ github.workspace }}
+          # 确保其他 GUI 运行时依赖也被复制到根目录
+          # ... (添加其他需要的 DLL/文件)
+          
+        shell: powershell
+        
+      # --- 4. 准备其他文件和目录结构 ---
+      - name: 📦 Prepare Release Files
+        shell: powershell
+        run: |
+          # 创建 config 和 output 目录
+          New-Item -ItemType Directory -Path config
+          New-Item -ItemType Directory -Path output
+          
+          # 复制配置文件模板到 config 目录
+          # 假设模板文件在仓库的 template_config 目录
+          Copy-Item -Path template_config\config.yaml -Destination config
+          Copy-Item -Path template_config\more.yaml -Destination config
+          
+          # 复制 Upgrade.exe 和 subs-check_Windows_i386.zip（这些应该是预先放在仓库中的文件）
+          Copy-Item -Path prebuilt\Upgrade.exe -Destination ${{ github.workspace }}
+          Copy-Item -Path prebuilt\subs-check_Windows_i386.zip -Destination ${{ github.workspace }}
+
+      # --- 5. 压缩所有文件到 ZIP ---
+      - name: 💾 Compress All Files
+        shell: powershell
+        run: |
+          $TagName = "${{ github.ref_name }}"
+          $ZipName = "SubCheck-Portable-$TagName.zip"
+          
+          # 选择所有需要的文件和目录进行压缩
+          Compress-Archive `
+            -Path subs-check.exe, subs-check.win.gui.exe, Upgrade.exe, `
+                    Newtonsoft.Json.dll, Newtonsoft.Json.xml, `
+                    YamlDotNet.dll, YamlDotNet.xml, `
+                    subs-check_Windows_i386.zip, `
+                    config, output `
+            -DestinationPath $ZipName
+
+      # --- 6. 上传到 Release Assets ---
+      - name: 📤 Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: SubCheck-Portable-*.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
